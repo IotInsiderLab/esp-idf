@@ -1,3 +1,24 @@
+# Espressif IoT Development Framework with Azure IoT Integration
+This is a fork of the [Espressif IDF](https://github.com/espressif/esp-idf). We have included the Azure IoT SDK into the components of the IDF.
+
+We have a sample project which can be seen [here](https://github.com/IotInsiderLab/esp32-azure-iot-sample).
+
+We suggest if you're going to use this to make your own fork and contain it as a submodule within your project. 
+
+We have found this pattern beneficial because different projects may use or rely on different versions of the IDF due to breaking changes, bug fixes, or library requirements for a project. Forking the ESP-IDF and placing the fork within the project as a submodule allows the state of the IDF to track and be tagged with regards to the project. This means when onboarding a new developer the can get the entire state of the project within a single pull. Additionally you can update submodules and then have that move down as breaking changes are fixed.
+
+### To add this project as a submodule
+``` bash
+> git submodule add --recursive git@github.com:IotInsiderLab/esp-idf-azure-iot.git
+> git submodule update --init --recursive
+```
+### To clone this project:
+``` bash
+> git clone --recursive git@github.com:IotInsiderLab/esp-idf-azure-iot.git
+```
+
+
+
 # Espressif IoT Development Framework
 
 [![alt text](https://readthedocs.org/projects/docs/badge/?version=latest "Documentation Status")](https://esp-idf.readthedocs.io/en/latest/?badge=latest)
