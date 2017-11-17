@@ -33,3 +33,6 @@
 [submodule "components/spiffs/spiffs"]
 	path = components/spiffs/spiffs
 	url = https://github.com/pellepl/spiffs.git
+[submodule "components/azure-iot"]
+	path = components/azure-iot
+	url = git@github.com:Azure/azure-iot-pal-esp32.git
