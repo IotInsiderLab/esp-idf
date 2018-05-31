@@ -47,6 +47,8 @@ import functools
 import serial
 from serial.tools import list_ports
 
+import Utility
+
 if sys.version_info[0] == 2:
     import Queue as _queue
 else:
@@ -72,6 +74,25 @@ def _expect_lock(func):
     return handler
 
 
+def _decode_data(data):
+    """ for python3, if the data is bytes, then decode it to string """
+    if isinstance(data, bytes):
+        # convert bytes to string
+        try:
+            data = data.decode("utf-8", "ignore")
+        except UnicodeDecodeError:
+            data = data.decode("iso8859-1", )
+    return data
+
+
+def _pattern_to_string(pattern):
+    try:
+        ret = "RegEx: " + pattern.pattern
+    except AttributeError:
+        ret = pattern
+    return ret
+
+
 class _DataCache(_queue.Queue):
     """
     Data cache based on Queue. Allow users to process data cache based on bytes instead of Queue."
@@ -80,6 +101,21 @@ class _DataCache(_queue.Queue):
     def __init__(self, maxsize=0):
         _queue.Queue.__init__(self, maxsize=maxsize)
         self.data_cache = str()
+
+    def _move_from_queue_to_cache(self):
+        """
+        move all of the available data in the queue to cache
+
+        :return: True if moved any item from queue to data cache, else False
+        """
+        ret = False
+        while True:
+            try:
+                self.data_cache += _decode_data(self.get(0))
+                ret = True
+            except _queue.Empty:
+                break
+        return ret
 
     def get_data(self, timeout=0):
         """
@@ -92,18 +128,16 @@ class _DataCache(_queue.Queue):
         if timeout < 0:
             timeout = 0
 
-        try:
-            data = self.get(timeout=timeout)
-            if isinstance(data, bytes):
-                # convert bytes to string
-                try:
-                    data = data.decode("utf-8", "ignore")
-                except UnicodeDecodeError:
-                    data = data.decode("iso8859-1",)
-            self.data_cache += data
-        except _queue.Empty:
-            # don't do anything when on update for cache
-            pass
+        ret = self._move_from_queue_to_cache()
+
+        if not ret:
+            # we only wait for new data if we can't provide a new data_cache
+            try:
+                data = self.get(timeout=timeout)
+                self.data_cache += _decode_data(data)
+            except _queue.Empty:
+                # don't do anything when on update for cache
+                pass
         return copy.deepcopy(self.data_cache)
 
     def flush(self, index=0xFFFFFFFF):
@@ -122,18 +156,48 @@ class _DataCache(_queue.Queue):
 
 class _RecvThread(threading.Thread):
 
+    PERFORMANCE_PATTERN = re.compile(r"\[Performance]\[(\w+)]: ([^\r\n]+)\r?\n")
+
     def __init__(self, read, data_cache):
         super(_RecvThread, self).__init__()
         self.exit_event = threading.Event()
         self.setDaemon(True)
         self.read = read
         self.data_cache = data_cache
+        # cache the last line of recv data for collecting performance
+        self._line_cache = str()
+
+    def collect_performance(self, data):
+        """ collect performance """
+        if data:
+            decoded_data = _decode_data(data)
+
+            matches = self.PERFORMANCE_PATTERN.findall(self._line_cache + decoded_data)
+            for match in matches:
+                Utility.console_log("[Performance][{}]: {}".format(match[0], match[1]),
+                                    color="orange")
+
+            # cache incomplete line to later process
+            lines = decoded_data.splitlines(True)
+            last_line = lines[-1]
+
+            if last_line[-1] != "\n":
+                if len(lines) == 1:
+                    # only one line and the line is not finished, then append this to cache
+                    self._line_cache += lines[-1]
+                else:
+                    # more than one line and not finished, replace line cache
+                    self._line_cache = lines[-1]
+            else:
+                # line finishes, flush cache
+                self._line_cache = str()
 
     def run(self):
         while not self.exit_event.isSet():
             data = self.read(1000)
             if data:
                 self.data_cache.put(data)
+                self.collect_performance(data)
 
     def exit(self):
         self.exit_event.set()
@@ -279,7 +343,7 @@ class BaseDUT(object):
         if flush:
             self.data_cache.flush()
         # do write if cache
-        if data:
+        if data is not None:
             self._port_write(data + eol if eol else data)
 
     @_expect_lock
@@ -380,7 +444,7 @@ class BaseDUT(object):
             data = self.data_cache.get_data(time.time() + timeout - start_time)
 
         if ret is None:
-            raise ExpectTimeout(self.name + ": " + str(pattern))
+            raise ExpectTimeout(self.name + ": " + _pattern_to_string(pattern))
         return ret
 
     def _expect_multi(self, expect_all, expect_item_list, timeout):
@@ -420,12 +484,11 @@ class BaseDUT(object):
                     if expect_item["ret"] is not None:
                         # match succeed for one item
                         matched_expect_items.append(expect_item)
-                        break
 
             # if expect all, then all items need to be matched,
             # else only one item need to matched
             if expect_all:
-                match_succeed = (matched_expect_items == expect_items)
+                match_succeed = len(matched_expect_items) == len(expect_items)
             else:
                 match_succeed = True if matched_expect_items else False
 
@@ -445,7 +508,7 @@ class BaseDUT(object):
             # flush already matched data
             self.data_cache.flush(slice_index)
         else:
-            raise ExpectTimeout(self.name + ": " + str(expect_items))
+            raise ExpectTimeout(self.name + ": " + str([_pattern_to_string(x) for x in expect_items]))
 
     @_expect_lock
     def expect_any(self, *expect_items, **timeout):
@@ -520,13 +583,9 @@ class SerialDUT(BaseDUT):
         :return: formatted data (str)
         """
         timestamp = time.time()
-        timestamp = "{}:{}".format(time.strftime("%m-%d %H:%M:%S", time.localtime(timestamp)),
-                                   str(timestamp % 1)[2:5])
-        try:
-            formatted_data = "[{}]:\r\n{}\r\n".format(timestamp, data.decode("utf-8", "ignore"))
-        except UnicodeDecodeError:
-            # if utf-8 fail, use iso-8859-1 (single char codec with range 0-255)
-            formatted_data = "[{}]:\r\n{}\r\n".format(timestamp, data.decode("iso8859-1",))
+        timestamp = "[{}:{}]".format(time.strftime("%m-%d %H:%M:%S", time.localtime(timestamp)),
+                                     str(timestamp % 1)[2:5])
+        formatted_data = timestamp.encode() + b"\r\n" + data + b"\r\n"
         return formatted_data
 
     def _port_open(self):
@@ -538,11 +597,13 @@ class SerialDUT(BaseDUT):
     def _port_read(self, size=1):
         data = self.port_inst.read(size)
         if data:
-            with open(self.log_file, "a+") as _log_file:
+            with open(self.log_file, "ab+") as _log_file:
                 _log_file.write(self._format_data(data))
         return data
 
     def _port_write(self, data):
+        if isinstance(data, str):
+            data = data.encode()
         self.port_inst.write(data)
 
     @classmethod

@@ -63,7 +63,7 @@
 #define DHCPS_DEBUG          0
 #define DHCPS_LOG printf
 
-#define MAX_STATION_NUM      8
+#define MAX_STATION_NUM CONFIG_LWIP_DHCPS_MAX_STATION_NUM
 
 #define DHCPS_STATE_OFFER 1
 #define DHCPS_STATE_DECLINE 2
@@ -94,7 +94,8 @@ static bool renew = false;
 static dhcps_lease_t dhcps_poll;
 static dhcps_time_t dhcps_lease_time = DHCPS_LEASE_TIME_DEF;  //minute
 static dhcps_offer_t dhcps_offer = 0xFF;
-static dhcps_offer_t dhcps_dns = 0xFF;
+static dhcps_offer_t dhcps_dns = 0x00;
+static dhcps_cb_t dhcps_cb;
 
 /******************************************************************************
  * FunctionName : dhcps_option_info
@@ -311,10 +312,10 @@ static u8_t *add_offer_options(u8_t *optptr)
 
     *optptr++ = DHCP_OPTION_LEASE_TIME;
     *optptr++ = 4;
-    *optptr++ = ((dhcps_lease_time * 60) >> 24) & 0xFF;
-    *optptr++ = ((dhcps_lease_time * 60) >> 16) & 0xFF;
-    *optptr++ = ((dhcps_lease_time * 60) >> 8) & 0xFF;
-    *optptr++ = ((dhcps_lease_time * 60) >> 0) & 0xFF;
+    *optptr++ = ((dhcps_lease_time * DHCPS_LEASE_UNIT) >> 24) & 0xFF;
+    *optptr++ = ((dhcps_lease_time * DHCPS_LEASE_UNIT) >> 16) & 0xFF;
+    *optptr++ = ((dhcps_lease_time * DHCPS_LEASE_UNIT) >> 8) & 0xFF;
+    *optptr++ = ((dhcps_lease_time * DHCPS_LEASE_UNIT) >> 0) & 0xFF;
 
     *optptr++ = DHCP_OPTION_SERVER_ID;
     *optptr++ = 4;
@@ -679,6 +680,10 @@ static void send_ack(struct dhcps_msg *m, u16_t len)
     DHCPS_LOG("dhcps: send_ack>>udp_sendto result %x\n", SendAck_err_t);
 #endif
 
+    if (SendAck_err_t == ERR_OK) {
+        dhcps_cb(m->yiaddr);
+    }
+
     if (p->ref != 0) {
 #if DHCPS_DEBUG
         DHCPS_LOG("udhcp: send_ack>>free pbuf\n");
@@ -800,8 +805,8 @@ static u8_t parse_options(u8_t *optptr, s16_t len)
 *******************************************************************************/
 static s16_t parse_msg(struct dhcps_msg *m, u16_t len)
 {
-    u32_t lease_timer = (dhcps_lease_time * 60)/DHCPS_COARSE_TIMER_SECS;
-    
+    u32_t lease_timer = (dhcps_lease_time * DHCPS_LEASE_UNIT)/DHCPS_COARSE_TIMER_SECS;
+
     if (memcmp((char *)m->options, &magic_cookie, sizeof(magic_cookie)) == 0) {
 #if DHCPS_DEBUG
         DHCPS_LOG("dhcps: len = %d\n", len);
@@ -1105,6 +1110,19 @@ static void dhcps_poll_set(u32_t ip)
 
 }
 
+
+/******************************************************************************
+ * FunctionName : dhcps_set_new_lease_cb
+ * Description  : set callback for dhcp server when it assign an IP 
+ *                to the connected dhcp client
+ * Parameters   : cb -- callback for dhcp server
+ * Returns      : none
+*******************************************************************************/
+void dhcps_set_new_lease_cb(dhcps_cb_t cb)
+{
+    dhcps_cb = cb;
+}
+
 /******************************************************************************
  * FunctionName : dhcps_start
  * Description  : start dhcp server function
@@ -1247,7 +1265,7 @@ void dhcps_coarse_tmr(void)
         }
     }
 
-    if (num_dhcps_pool >= MAX_STATION_NUM) {
+    if (num_dhcps_pool > MAX_STATION_NUM) {
         kill_oldest_dhcps_pool();
     }
 }

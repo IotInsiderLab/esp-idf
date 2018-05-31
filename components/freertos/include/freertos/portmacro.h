@@ -264,7 +264,7 @@ static inline unsigned portENTER_CRITICAL_NESTED() {
 
 //xTaskCreateStatic uses these functions to check incoming memory.
 #define portVALID_TCB_MEM(ptr) (esp_ptr_internal(ptr) && esp_ptr_byte_accessible(ptr))
-#ifndef CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY
+#ifdef CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY
 #define portVALID_STACK_MEM(ptr) esp_ptr_byte_accessible(ptr)
 #else
 #define portVALID_STACK_MEM(ptr) (esp_ptr_internal(ptr) && esp_ptr_byte_accessible(ptr))
@@ -365,9 +365,13 @@ typedef struct {
 	#define PRIVILEGED_DATA
 #endif
 
+extern void esp_vApplicationIdleHook( void );
+extern void esp_vApplicationWaitiHook( void );
 
 void _xt_coproc_release(volatile void * coproc_sa_base);
+bool vApplicationSleep( TickType_t xExpectedIdleTime );
 
+#define portSUPPRESS_TICKS_AND_SLEEP( idleTime ) vApplicationSleep( idleTime )
 
 // porttrace
 #if configUSE_TRACE_FACILITY_2

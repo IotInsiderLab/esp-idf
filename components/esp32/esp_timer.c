@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include <sys/param.h>
+#include <string.h>
 #include "esp_types.h"
 #include "esp_attr.h"
 #include "esp_err.h"
@@ -75,12 +76,20 @@ static LIST_HEAD(esp_timer_list, esp_timer) s_timers =
 // all the timers
 static LIST_HEAD(esp_inactive_timer_list, esp_timer) s_inactive_timers =
         LIST_HEAD_INITIALIZER(s_timers);
+// used to keep track of the timer when executing the callback
+static esp_timer_handle_t s_timer_in_callback;
 #endif
 // task used to dispatch timer callbacks
 static TaskHandle_t s_timer_task;
 // counting semaphore used to notify the timer task from ISR
 static SemaphoreHandle_t s_timer_semaphore;
-// lock protecting s_timers and s_inactive_timers
+
+#if CONFIG_SPIRAM_USE_MALLOC
+// memory for s_timer_semaphore
+static StaticQueue_t s_timer_semaphore_memory;
+#endif
+
+// lock protecting s_timers, s_inactive_timers, s_timer_in_callback
 static portMUX_TYPE s_timer_lock = portMUX_INITIALIZER_UNLOCKED;
 
 
@@ -149,6 +158,9 @@ esp_err_t esp_timer_delete(esp_timer_handle_t timer)
         return ESP_ERR_INVALID_STATE;
     }
 #if WITH_PROFILING
+    if (timer == s_timer_in_callback) {
+        s_timer_in_callback = NULL;
+    }
     timer_remove_inactive(timer);
 #endif
     if (timer == NULL) {
@@ -266,14 +278,21 @@ static void timer_process_alarm(esp_timer_dispatch_t dispatch_method)
         }
 #if WITH_PROFILING
         uint64_t callback_start = now;
+        s_timer_in_callback = it;
 #endif
         timer_list_unlock();
         (*it->callback)(it->arg);
         timer_list_lock();
         now = esp_timer_impl_get_time();
 #if WITH_PROFILING
-        it->times_triggered++;
-        it->total_callback_run_time += now - callback_start;
+        /* The callback might have deleted the timer.
+         * If this happens, esp_timer_delete will set s_timer_in_callback
+         * to NULL.
+         */
+        if (s_timer_in_callback) {
+            s_timer_in_callback->times_triggered++;
+            s_timer_in_callback->total_callback_run_time += now - callback_start;
+        }
 #endif
         it = LIST_FIRST(&s_timers);
     }
@@ -317,7 +336,12 @@ esp_err_t esp_timer_init(void)
         return ESP_ERR_INVALID_STATE;
     }
 
+#if CONFIG_SPIRAM_USE_MALLOC
+    memset(&s_timer_semaphore_memory, 0, sizeof(StaticQueue_t));
+    s_timer_semaphore = xSemaphoreCreateCountingStatic(TIMER_EVENT_QUEUE_SIZE, 0, &s_timer_semaphore_memory);
+#else
     s_timer_semaphore = xSemaphoreCreateCounting(TIMER_EVENT_QUEUE_SIZE, 0);
+#endif
     if (!s_timer_semaphore) {
         return ESP_ERR_NO_MEM;
     }
@@ -441,6 +465,18 @@ esp_err_t esp_timer_dump(FILE* stream)
 
     free(print_buf);
     return ESP_OK;
+}
+
+int64_t IRAM_ATTR esp_timer_get_next_alarm()
+{
+    int64_t next_alarm = INT64_MAX;
+    timer_list_lock();
+    esp_timer_handle_t it = LIST_FIRST(&s_timers);
+    if (it) {
+        next_alarm = it->alarm;
+    }
+    timer_list_unlock();
+    return next_alarm;
 }
 
 int64_t IRAM_ATTR esp_timer_get_time()

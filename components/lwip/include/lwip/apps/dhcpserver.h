@@ -14,6 +14,7 @@
 #ifndef __DHCPS_H__
 #define __DHCPS_H__
 
+#include "sdkconfig.h"
 #include "lwip/ip_addr.h"
 
 typedef struct dhcps_state{
@@ -50,7 +51,8 @@ enum dhcps_offer_option{
 
 #define DHCPS_COARSE_TIMER_SECS  1
 #define DHCPS_MAX_LEASE 0x64
-#define DHCPS_LEASE_TIME_DEF	(120)
+#define DHCPS_LEASE_TIME_DEF (120)
+#define DHCPS_LEASE_UNIT CONFIG_LWIP_DHCPS_LEASE_UNIT
 
 struct dhcps_pool{
 	ip4_addr_t ip;
@@ -67,6 +69,8 @@ typedef struct {
         dhcps_time_t  dhcps_time;
         dhcps_lease_t dhcps_poll;
 } dhcps_options_t;
+
+typedef void (*dhcps_cb_t)(u8_t client_ip[4]);
 
 static inline bool dhcps_router_enabled (dhcps_offer_t offer) 
 {
@@ -85,6 +89,7 @@ void dhcps_set_option_info(u8_t op_id, void *opt_info, u32_t opt_len);
 bool dhcp_search_ip_on_mac(u8_t *mac, ip4_addr_t *ip);
 void dhcps_dns_setserver(const ip_addr_t *dnsserver);
 ip4_addr_t dhcps_dns_getserver();
+void dhcps_set_new_lease_cb(dhcps_cb_t cb);
 
 #endif
 

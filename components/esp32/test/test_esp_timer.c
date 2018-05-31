@@ -4,10 +4,17 @@
 #include <sys/time.h>
 #include "unity.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "test_utils.h"
+#include "../esp_timer_impl.h"
+
+#ifdef CONFIG_ESP_TIMER_PROFILING
+#define WITH_PROFILING 1
+#endif
+
 
 TEST_CASE("esp_timer orders timers correctly", "[esp_timer]")
 {
@@ -335,8 +342,7 @@ TEST_CASE("esp_timer_get_time call takes less than 1us", "[esp_timer]")
         end = esp_timer_get_time();
     }
     int ns_per_call = (int) ((end - begin) * 1000 / iter_count);
-    printf("esp_timer_get_time: %dns per call\n", ns_per_call);
-    TEST_ASSERT(ns_per_call < 1000);
+    TEST_PERFORMANCE_LESS_THAN(ESP_TIMER_GET_TIME_PER_CALL, "%dns", ns_per_call);
 }
 
 /* This test runs for about 10 minutes and is disabled in CI.
@@ -378,4 +384,97 @@ TEST_CASE("esp_timer_get_time returns monotonic values", "[esp_timer][ignore]")
 TEST_CASE("Can dump esp_timer stats", "[esp_timer]")
 {
     esp_timer_dump(stdout);
+}
+
+TEST_CASE("Can delete timer from callback", "[esp_timer]")
+{
+    typedef struct {
+        SemaphoreHandle_t notify_from_timer_cb;
+        esp_timer_handle_t timer;
+    } test_arg_t;
+
+    void timer_func(void* varg)
+    {
+        test_arg_t arg = *(test_arg_t*) varg;
+        esp_timer_delete(arg.timer);
+        printf("Timer %p is deleted\n", arg.timer);
+        xSemaphoreGive(arg.notify_from_timer_cb);
+    }
+
+    test_arg_t args = {
+            .notify_from_timer_cb = xSemaphoreCreateBinary(),
+    };
+
+    esp_timer_create_args_t timer_args = {
+            .callback = &timer_func,
+            .arg = &args,
+            .name = "self_deleter"
+    };
+    esp_timer_create(&timer_args, &args.timer);
+    esp_timer_start_once(args.timer, 10000);
+
+    TEST_ASSERT_TRUE(xSemaphoreTake(args.notify_from_timer_cb, 1000 / portTICK_PERIOD_MS));
+    printf("Checking heap at %p\n", args.timer);
+    TEST_ASSERT_TRUE(heap_caps_check_integrity_addr((intptr_t) args.timer, true));
+
+    vSemaphoreDelete(args.notify_from_timer_cb);
+}
+
+TEST_CASE("esp_timer_impl_advance moves time base correctly", "[esp_timer]")
+{
+    ref_clock_init();
+    int64_t t0 = esp_timer_get_time();
+    const int64_t diff_us = 1000000;
+    esp_timer_impl_advance(diff_us);
+    int64_t t1 = esp_timer_get_time();
+    int64_t t_delta = t1 - t0;
+    printf("diff_us=%lld t1-t0=%lld\n", diff_us, t_delta);
+    TEST_ASSERT_INT_WITHIN(1000, diff_us, (int) t_delta);
+    ref_clock_deinit();
+}
+
+
+TEST_CASE("after esp_timer_impl_advance, timers run when expected", "[esp_timer]")
+{
+    typedef struct {
+        int64_t cb_time;
+    } test_state_t;
+
+    void timer_func(void* varg) {
+        test_state_t* arg = (test_state_t*) varg;
+        arg->cb_time = ref_clock_get();
+    }
+
+    ref_clock_init();
+
+    test_state_t state = { 0 };
+
+    esp_timer_create_args_t timer_args = {
+            .callback = &timer_func,
+            .arg = &state
+    };
+    esp_timer_handle_t timer;
+    TEST_ESP_OK(esp_timer_create(&timer_args, &timer));
+
+    const int64_t interval = 10000;
+    const int64_t advance = 2000;
+
+    printf("test 1\n");
+    int64_t t_start = ref_clock_get();
+    esp_timer_start_once(timer, interval);
+    esp_timer_impl_advance(advance);
+    vTaskDelay(2 * interval / 1000 / portTICK_PERIOD_MS);
+
+    TEST_ASSERT_INT_WITHIN(portTICK_PERIOD_MS * 1000, interval - advance, state.cb_time - t_start);
+
+    printf("test 2\n");
+    state.cb_time = 0;
+    t_start = ref_clock_get();
+    esp_timer_start_once(timer, interval);
+    esp_timer_impl_advance(interval);
+    vTaskDelay(1);
+
+    TEST_ASSERT(state.cb_time > t_start);
+
+    ref_clock_deinit();
 }

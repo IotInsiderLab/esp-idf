@@ -22,21 +22,20 @@
  *
  ******************************************************************************/
 
-#include "bt_target.h"
+#include "common/bt_target.h"
 
 #if defined(GATTC_INCLUDED) && (GATTC_INCLUDED == TRUE)
 
 #include <string.h>
 
-#include "bdaddr.h"
+#include "device/bdaddr.h"
 // #include "btif/include/btif_util.h"
-#include "utl.h"
-#include "bta_sys.h"
+#include "bta/utl.h"
+#include "bta/bta_sys.h"
 #include "bta_gattc_int.h"
-#include "l2c_api.h"
-#include "allocator.h"
+#include "stack/l2c_api.h"
+#include "osi/allocator.h"
 
-#define LOG_TAG "bt_bta_gattc"
 /*****************************************************************************
 **  Constants
 *****************************************************************************/
@@ -232,8 +231,9 @@ tBTA_GATTC_CLCB *bta_gattc_clcb_alloc(tBTA_GATTC_IF client_if, BD_ADDR remote_bd
             bdcpy(p_clcb->bda, remote_bda);
 
             p_clcb->p_rcb = bta_gattc_cl_get_regcb(client_if);
-            p_clcb->p_cmd_list = list_new(osi_free_func);
-
+            if (p_clcb->p_cmd_list == NULL) {
+                p_clcb->p_cmd_list = list_new(osi_free_func);
+            }
             if ((p_clcb->p_srcb = bta_gattc_find_srcb(remote_bda)) == NULL) {
                 p_clcb->p_srcb      = bta_gattc_srcb_alloc(remote_bda);
             }
@@ -310,6 +310,8 @@ void bta_gattc_clcb_dealloc(tBTA_GATTC_CLCB *p_clcb)
         p_clcb->p_q_cmd = NULL;
         // don't forget to clear the command queue before dealloc the clcb.
         list_clear(p_clcb->p_cmd_list);
+        osi_free((void *)p_clcb->p_cmd_list);
+        p_clcb->p_cmd_list = NULL;
         //osi_free_and_reset((void **)&p_clcb->p_q_cmd);
         memset(p_clcb, 0, sizeof(tBTA_GATTC_CLCB));
     } else {
@@ -706,6 +708,7 @@ void bta_gattc_send_open_cback( tBTA_GATTC_RCB *p_clreg, tBTA_GATT_STATUS status
                                 BD_ADDR remote_bda, UINT16 conn_id,
                                 tBTA_TRANSPORT transport, UINT16 mtu)
 {
+
     tBTA_GATTC      cb_data;
 
     if (p_clreg->p_cback) {
@@ -959,7 +962,7 @@ void bta_to_btif_uuid(bt_uuid_t *p_dest, tBT_UUID *p_src)
             break;
 
         default:
-            LOG_ERROR("%s: Unknown UUID length %d!", __FUNCTION__, p_src->len);
+            APPL_TRACE_ERROR("%s: Unknown UUID length %d!", __FUNCTION__, p_src->len);
             break;
     }
 }

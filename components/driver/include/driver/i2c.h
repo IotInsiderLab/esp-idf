@@ -69,6 +69,13 @@ typedef enum {
     I2C_ADDR_BIT_MAX,
 } i2c_addr_mode_t;
 
+typedef enum {
+    I2C_MASTER_ACK = 0x0,        /*!< I2C ack for each byte read */
+    I2C_MASTER_NACK = 0x1,       /*!< I2C nack for each byte read */
+    I2C_MASTER_LAST_NACK = 0x2,   /*!< I2C nack for the last byte*/
+    I2C_MASTER_ACK_MAX,
+} i2c_ack_type_t;
+
 /**
  * @brief I2C initialization parameters
  */
@@ -106,6 +113,10 @@ typedef void* i2c_cmd_handle_t;    /*!< I2C command handle  */
  *        Only slave mode will use this value, driver will ignore this value in master mode.
  * @param intr_alloc_flags Flags used to allocate the interrupt. One or multiple (ORred)
  *            ESP_INTR_FLAG_* values. See esp_intr_alloc.h for more info.
+ *        @note
+ *        In master mode, if the cache is likely to be disabled(such as write flash) and the slave is time-sensitive,
+ *        `ESP_INTR_FLAG_IRAM` is suggested to be used. In this case, please use the memory allocated from internal RAM in i2c read and write function,
+ *        because we can not access the psram(if psram is enabled) in interrupt handle function when cache is disabled.
  *
  * @return
  *     - ESP_OK   Success
@@ -265,6 +276,8 @@ esp_err_t i2c_master_write_byte(i2c_cmd_handle_t cmd_handle, uint8_t data, bool 
  *
  * @param cmd_handle I2C cmd link
  * @param data data to send
+ *        @note
+ *        If the psram is enabled and intr_flag is `ESP_INTR_FLAG_IRAM`, please use the memory allocated from internal RAM.
  * @param data_len data length
  * @param ack_en enable ack check for master
  *
@@ -282,13 +295,15 @@ esp_err_t i2c_master_write(i2c_cmd_handle_t cmd_handle, uint8_t* data, size_t da
  *
  * @param cmd_handle I2C cmd link
  * @param data pointer accept the data byte
+ *        @note
+ *        If the psram is enabled and intr_flag is `ESP_INTR_FLAG_IRAM`, please use the memory allocated from internal RAM.
  * @param ack ack value for read command
  *
  * @return
  *     - ESP_OK Success
  *     - ESP_ERR_INVALID_ARG Parameter error
  */
-esp_err_t i2c_master_read_byte(i2c_cmd_handle_t cmd_handle, uint8_t* data, int ack);
+esp_err_t i2c_master_read_byte(i2c_cmd_handle_t cmd_handle, uint8_t* data, i2c_ack_type_t ack);
 
 /**
  * @brief Queue command for I2C master to read data from I2C bus
@@ -298,6 +313,8 @@ esp_err_t i2c_master_read_byte(i2c_cmd_handle_t cmd_handle, uint8_t* data, int a
  *
  * @param cmd_handle I2C cmd link
  * @param data data buffer to accept the data from bus
+ *        @note
+ *        If the psram is enabled and intr_flag is `ESP_INTR_FLAG_IRAM`, please use the memory allocated from internal RAM.
  * @param data_len read data length
  * @param ack ack value for read command
  *
@@ -305,7 +322,7 @@ esp_err_t i2c_master_read_byte(i2c_cmd_handle_t cmd_handle, uint8_t* data, int a
  *     - ESP_OK Success
  *     - ESP_ERR_INVALID_ARG Parameter error
  */
-esp_err_t i2c_master_read(i2c_cmd_handle_t cmd_handle, uint8_t* data, size_t data_len, int ack);
+esp_err_t i2c_master_read(i2c_cmd_handle_t cmd_handle, uint8_t* data, size_t data_len, i2c_ack_type_t ack);
 
 /**
  * @brief Queue command for I2C master to generate a stop signal

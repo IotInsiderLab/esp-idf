@@ -90,6 +90,16 @@ void esp_eth_get_mac(uint8_t mac[6])
     memcpy(mac, &(emac_config.macaddr[0]), 6);
 }
 
+esp_err_t esp_eth_set_mac(const uint8_t mac[6])
+{
+    if((mac[0] & 0x01) == 0) {
+        memcpy(&(emac_config.macaddr[0]),mac, 6);
+        return ESP_OK;
+    } else {
+        return ESP_ERR_INVALID_MAC;
+    }
+}
+
 static void emac_setup_tx_desc(struct dma_extended_desc *tx_desc , uint32_t size)
 {
     tx_desc->basic.desc1 = size & 0xfff;
@@ -204,13 +214,13 @@ void esp_eth_smi_write(uint32_t reg_num, uint16_t value)
 {
     uint32_t phy_num = emac_config.phy_addr;
 
-    while (REG_GET_BIT(EMAC_GMACGMIIADDR_REG, EMAC_GMIIBUSY) == 1 ) {
+    while (REG_GET_BIT(EMAC_GMIIADDR_REG, EMAC_MIIBUSY) == 1 ) {
     }
 
-    REG_WRITE(EMAC_GMACGMIIDATA_REG, value);
-    REG_WRITE(EMAC_GMACGMIIADDR_REG, 0x3 | ((reg_num & 0x1f) << 6) | ((phy_num & 0x1f) << 11) | ((0x3) << 2));
+    REG_WRITE(EMAC_MIIDATA_REG, value);
+    REG_WRITE(EMAC_GMIIADDR_REG, 0x3 | ((reg_num & 0x1f) << 6) | ((phy_num & 0x1f) << 11) | ((0x3) << 2));
 
-    while (REG_GET_BIT(EMAC_GMACGMIIADDR_REG, EMAC_GMIIBUSY) == 1 ) {
+    while (REG_GET_BIT(EMAC_GMIIADDR_REG, EMAC_MIIBUSY) == 1 ) {
     }
 }
 
@@ -219,13 +229,13 @@ uint16_t esp_eth_smi_read(uint32_t reg_num)
     uint32_t phy_num = emac_config.phy_addr;
     uint16_t value = 0;
 
-    while (REG_GET_BIT(EMAC_GMACGMIIADDR_REG, EMAC_GMIIBUSY) == 1 ) {
+    while (REG_GET_BIT(EMAC_GMIIADDR_REG, EMAC_MIIBUSY) == 1 ) {
     }
 
-    REG_WRITE(EMAC_GMACGMIIADDR_REG, 0x1 | ((reg_num & 0x1f) << 6) | ((phy_num & 0x1f) << 11) | (0x3 << 2));
-    while (REG_GET_BIT(EMAC_GMACGMIIADDR_REG, EMAC_GMIIBUSY) == 1 ) {
+    REG_WRITE(EMAC_GMIIADDR_REG, 0x1 | ((reg_num & 0x1f) << 6) | ((phy_num & 0x1f) << 11) | (0x3 << 2));
+    while (REG_GET_BIT(EMAC_GMIIADDR_REG, EMAC_MIIBUSY) == 1 ) {
     }
-    value = (REG_READ(EMAC_GMACGMIIDATA_REG) & 0xffff);
+    value = (REG_READ(EMAC_MIIDATA_REG) & 0xffff);
 
     return value;
 }
@@ -275,12 +285,12 @@ static void emac_set_user_config_data(eth_config_t *config )
 
 static void emac_enable_intr()
 {
-    REG_WRITE(EMAC_DMAINTERRUPT_EN_REG, EMAC_INTR_ENABLE_BIT);
+    REG_WRITE(EMAC_DMAIN_EN_REG, EMAC_INTR_ENABLE_BIT);
 }
 
 static void emac_disable_intr()
 {
-    REG_WRITE(EMAC_DMAINTERRUPT_EN_REG, 0);
+    REG_WRITE(EMAC_DMAIN_EN_REG, 0);
 }
 
 static esp_err_t emac_verify_args(void)
@@ -350,16 +360,6 @@ static esp_err_t emac_verify_args(void)
     return ret;
 }
 
-//TODO for mac filter
-void emac_set_mac_addr(void)
-{
-}
-
-//TODO
-void emac_check_mac_addr(void)
-{
-}
-
 static void emac_process_tx(void)
 {
     uint32_t cur_tx_desc = emac_read_tx_cur_reg();
@@ -414,7 +414,7 @@ static uint32_t IRAM_ATTR emac_get_rxbuf_count_in_intr(void)
     uint32_t cur_rx_desc = emac_read_rx_cur_reg();
     struct dma_extended_desc *cur_desc = (struct dma_extended_desc *)cur_rx_desc;
 
-    while (cur_desc->basic.desc0 == EMAC_DESC_RX_OWN) {
+    while (cur_desc->basic.desc0 == EMAC_DESC_RX_OWN && cnt < DMA_RX_BUF_NUM) {
         cnt++;
         cur_desc = (struct dma_extended_desc *)cur_desc->basic.desc3;
     }
@@ -590,22 +590,22 @@ static void IRAM_ATTR emac_process_intr(void *arg)
 
 static void emac_set_macaddr_reg(void)
 {
-    REG_SET_FIELD(EMAC_GMACADDR0HIGH_REG, EMAC_MAC_ADDRESS0_HI, (emac_config.macaddr[0] << 8) | (emac_config.macaddr[1]));
-    REG_WRITE(EMAC_GMACADDR0LOW_REG, (emac_config.macaddr[2] << 24) |  (emac_config.macaddr[3] << 16) | (emac_config.macaddr[4] << 8) | (emac_config.macaddr[5]));
+    REG_SET_FIELD(EMAC_ADDR0HIGH_REG, EMAC_ADDRESS0_HI, (emac_config.macaddr[0] << 8) | (emac_config.macaddr[1]));
+    REG_WRITE(EMAC_ADDR0LOW_REG, (emac_config.macaddr[2] << 24) |  (emac_config.macaddr[3] << 16) | (emac_config.macaddr[4] << 8) | (emac_config.macaddr[5]));
 }
 
 static void emac_check_phy_init(void)
 {
     emac_config.emac_phy_check_init();
     if (emac_config.emac_phy_get_duplex_mode() == ETH_MODE_FULLDUPLEX) {
-        REG_SET_BIT(EMAC_GMACCONFIG_REG, EMAC_GMACDUPLEX);
+        REG_SET_BIT(EMAC_GMACCONFIG_REG, EMAC_EMACDUPLEX);
     } else {
-        REG_CLR_BIT(EMAC_GMACCONFIG_REG, EMAC_GMACDUPLEX);
+        REG_CLR_BIT(EMAC_GMACCONFIG_REG, EMAC_EMACDUPLEX);
     }
     if (emac_config.emac_phy_get_speed_mode() == ETH_SPEED_MODE_100M) {
-        REG_SET_BIT(EMAC_GMACCONFIG_REG, EMAC_GMACFESPEED);
+        REG_SET_BIT(EMAC_GMACCONFIG_REG, EMAC_EMACFESPEED);
     } else {
-        REG_CLR_BIT(EMAC_GMACCONFIG_REG, EMAC_GMACFESPEED);
+        REG_CLR_BIT(EMAC_GMACCONFIG_REG, EMAC_EMACFESPEED);
     }
 #if CONFIG_EMAC_L2_TO_L3_RX_BUF_MODE
     emac_disable_flowctrl();
@@ -769,11 +769,7 @@ static void emac_start(void *param)
     emac_enable_clk(true);
 
     emac_reset();
-    emac_macaddr_init();
 
-    emac_check_mac_addr();
-
-    emac_set_mac_addr();
     emac_set_macaddr_reg();
 
     emac_set_tx_base_reg();
@@ -1095,8 +1091,8 @@ esp_err_t esp_eth_init_internal(eth_config_t *config)
 
     emac_config.emac_gpio_config();
 
-    ESP_LOGI(TAG, "mac version %04xa", emac_read_mac_version());
     emac_hw_init();
+    emac_macaddr_init();
 
     //watchdog  TODO
 

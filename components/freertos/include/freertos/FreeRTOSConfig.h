@@ -253,6 +253,7 @@ int xt_clock_freq(void) __attribute__((deprecated));
 #define INCLUDE_uxTaskGetStackHighWaterMark	1
 #define INCLUDE_pcTaskGetTaskName			1
 #define INCLUDE_xTaskGetIdleTaskHandle      1
+#define INCLUDE_pxTaskGetStackStart			1
 
 #define INCLUDE_xSemaphoreGetMutexHolder    1
 
@@ -288,6 +289,10 @@ extern void vPortCleanUpTCB ( void *pxTCB );
 #define INCLUDE_eTaskGetState               1
 #define configUSE_QUEUE_SETS                1
 
+#define configUSE_TICKLESS_IDLE             CONFIG_FREERTOS_USE_TICKLESS_IDLE
+#if configUSE_TICKLESS_IDLE
+#define configEXPECTED_IDLE_TIME_BEFORE_SLEEP   CONFIG_FREERTOS_IDLE_TIME_BEFORE_SLEEP
+#endif //configUSE_TICKLESS_IDLE
 
 #define configXT_BOARD                      1   /* Board mode */
 #define configXT_SIMULATOR					0

@@ -20,7 +20,7 @@ class Base
 {
 public:
     virtual ~Base() {}
-    virtual void foo() = 0; 
+    virtual void foo() = 0;
 };
 
 class Derived : public Base
@@ -105,30 +105,35 @@ template<> int SlowInit<2>::mInitBy = -1;
 template<> int SlowInit<2>::mInitCount = 0;
 
 template<int obj>
-static void start_slow_init_task(int id, int affinity)
+static int start_slow_init_task(int id, int affinity)
 {
-    xTaskCreatePinnedToCore(&SlowInit<obj>::task, "slow_init", 2048,
-            reinterpret_cast<void*>(id), 3, NULL, affinity);
+    return xTaskCreatePinnedToCore(&SlowInit<obj>::task, "slow_init", 2048,
+            reinterpret_cast<void*>(id), 3, NULL, affinity) ? 1 : 0;
 }
 
 TEST_CASE("static initialization guards work as expected", "[cxx]")
 {
     s_slow_init_sem = xSemaphoreCreateCounting(10, 0);
     TEST_ASSERT_NOT_NULL(s_slow_init_sem);
+    int task_count = 0;
     // four tasks competing for static initialization of one object
-    start_slow_init_task<1>(0, PRO_CPU_NUM);
-    start_slow_init_task<1>(1, APP_CPU_NUM);
-    start_slow_init_task<1>(2, PRO_CPU_NUM);
-    start_slow_init_task<1>(3, tskNO_AFFINITY);
+    task_count += start_slow_init_task<1>(0, PRO_CPU_NUM);
+#if portNUM_PROCESSORS == 2
+    task_count += start_slow_init_task<1>(1, APP_CPU_NUM);
+#endif
+    task_count += start_slow_init_task<1>(2, PRO_CPU_NUM);
+    task_count += start_slow_init_task<1>(3, tskNO_AFFINITY);
 
     // four tasks competing for static initialization of another object
-    start_slow_init_task<2>(0, PRO_CPU_NUM);
-    start_slow_init_task<2>(1, APP_CPU_NUM);
-    start_slow_init_task<2>(2, PRO_CPU_NUM);
-    start_slow_init_task<2>(3, tskNO_AFFINITY);
+    task_count += start_slow_init_task<2>(0, PRO_CPU_NUM);
+#if portNUM_PROCESSORS == 2
+    task_count += start_slow_init_task<2>(1, APP_CPU_NUM);
+#endif
+    task_count += start_slow_init_task<2>(2, PRO_CPU_NUM);
+    task_count += start_slow_init_task<2>(3, tskNO_AFFINITY);
 
     // All tasks should
-    for (int i = 0; i < 8; ++i) {
+    for (int i = 0; i < task_count; ++i) {
         TEST_ASSERT_TRUE(xSemaphoreTake(s_slow_init_sem, 500/portTICK_PERIOD_MS));
     }
     vSemaphoreDelete(s_slow_init_sem);
@@ -192,8 +197,13 @@ TEST_CASE("before scheduler has started, static initializers work correctly", "[
 
 TEST_CASE("c++ exceptions work", "[cxx]")
 {
-    /* Note: This test currently trips the memory leak threshold
-       as libunwind allocates ~4KB of data on first exception. */
+    /* Note: When first exception (in system) is thrown this test produces memory leaks report (~500 bytes):
+       - 392 bytes (can vary) as libunwind allocates memory to keep stack frames info to handle exceptions.
+         This info is kept until global destructors are called by __do_global_dtors_aux()
+       - 8 bytes are allocated by __cxa_get_globals() to keep __cxa_eh_globals
+       - 16 bytes are allocated by pthread_setspecific() which is called by __cxa_get_globals() to init TLS var for __cxa_eh_globals
+       - 88 bytes are allocated by pthread_setspecific() to init internal lock
+       */
     int thrown_value;
     try
     {
@@ -205,6 +215,60 @@ TEST_CASE("c++ exceptions work", "[cxx]")
     }
     TEST_ASSERT_EQUAL(20, thrown_value);
     printf("OK?\n");
+}
+
+TEST_CASE("c++ exceptions emergency pool", "[cxx] [ignore]")
+{
+    /* Note: When first exception (in system) is thrown this test produces memory leaks report (~500 bytes):
+       - 392 bytes (can vary) as libunwind allocates memory to keep stack frames info to handle exceptions.
+         This info is kept until global destructors are called by __do_global_dtors_aux()
+       - 8 bytes are allocated by __cxa_get_globals() to keep __cxa_eh_globals
+       - 16 bytes are allocated by pthread_setspecific() which is called by __cxa_get_globals() to init TLS var for __cxa_eh_globals
+       - 88 bytes are allocated by pthread_setspecific() to init internal lock
+       */
+    void **p, **pprev = NULL;
+    int thrown_value = 0;
+    // throw first exception to ensure that all initial allocations are made
+    try
+    {
+        throw 33;
+    }
+    catch (int e)
+    {
+        thrown_value = e;
+    }
+    TEST_ASSERT_EQUAL(33, thrown_value);
+    // consume all dynamic memory
+    while ((p = (void **)malloc(sizeof(void *)))) {
+        if (pprev) {
+            *p = pprev;
+        } else {
+            *p = NULL;
+        }
+        pprev = p;
+    }
+    try
+    {
+        throw 20;
+    }
+    catch (int e)
+    {
+        thrown_value = e;
+        printf("Got exception %d\n", thrown_value);
+    }
+#if CONFIG_CXX_EXCEPTIONS_EMG_POOL_SIZE > 0
+    // free all memory
+    while (pprev) {
+        p = (void **)(*pprev);
+        free(pprev);
+        pprev = p;
+    }
+    TEST_ASSERT_EQUAL(20, thrown_value);
+#else
+    // if emergency pool is disabled we should never get here,
+    // expect abort() due to lack of memory for new exception
+    TEST_ASSERT_TRUE(0 == 1);
+#endif
 }
 
 #endif
