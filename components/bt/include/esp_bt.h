@@ -46,7 +46,7 @@ typedef struct {
 /* While scanning, if the free memory value in controller is less than SCAN_SEND_ADV_RESERVED_SIZE, 
 the adv packet will be discarded until the memory is restored. */
 #define SCAN_SEND_ADV_RESERVED_SIZE        1000
-/* open controller log debug when adv lost */
+/* enable controller log debug when adv lost */
 #define CONTROLLER_ADV_LOST_DEBUG_BIT      (0<<0)
 
 #ifdef CONFIG_BT_HCI_UART_NO
@@ -291,7 +291,7 @@ void esp_vhci_host_register_callback(const esp_vhci_host_callback_t *callback);
 
 /** @brief esp_bt_controller_mem_release
  * release the memory by mode, if never use the bluetooth mode
- * it can release the .bbs, .data and other section to heap.
+ * it can release the .bss, .data and other section to heap.
  * The total size is about 70k bytes.
  *
  * esp_bt_controller_mem_release(mode) should be called only before esp_bt_controller_init()
